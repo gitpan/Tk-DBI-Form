@@ -1,0 +1,22 @@
+Tk::DBI::Form
+============================
+
+Is a Megawidget display a form to display, edit, delete and insert a record from a table.
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+
+COPYRIGHT AND LICENCE
+
+All rights reserved by Frank Herrmann. This program is free software; 
+you can redistribute it and/or modify it under the same terms as Perl itself. 
+
+
+ 

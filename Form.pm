@@ -1,0 +1,1180 @@
+package Tk::DBI::Form;
+#------------------------------------------------
+# automagically updated versioning variables -- CVS modifies these!
+#------------------------------------------------
+our $Revision           = '$Revision: 1.4 $';
+our $CheckinDate        = '$Date: 2003/04/03 15:39:27 $';
+our $CheckinUser        = '$Author: xpix $';
+# we need to clean these up right here
+$Revision               =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
+$CheckinDate            =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
+$CheckinUser            =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
+#-------------------------------------------------
+#-- package Tk::DBInterface ----------------------
+#-------------------------------------------------
+
+use Tk::JBrowseEntry;
+use Tk::XDialogBox;
+use Tk::NumEntry;
+use Tk::Date;
+use Tk::LabFrame;
+use Tk::FBox;
+
+
+use Date::Manip;
+use Data::Dumper;
+
+use base qw/Tk::Frame/;
+
+use strict;
+
+Construct Tk::Widget 'DBIForm';
+
+my ($DELEIMG, $CHANGEIMG);
+
+# Class initializer.
+
+# ------------------------------------------
+sub ClassInit {
+# ------------------------------------------
+
+    # ClassInit is called once per MainWindow, and serves to 
+    # perform tasks for the class as a whole.  Here we create
+    # a Photo object used by all instances of the class.
+
+    my ($class, $mw) = @_;
+
+    $class->SUPER::ClassInit($mw);
+
+} # end ClassInit
+
+# Instance initializer.
+
+# ------------------------------------------
+sub Populate {
+# ------------------------------------------
+	my ($obj, $args) = @_;
+	$obj->{dbh} 		= delete $args->{'-dbh'} 	|| warn "No DB-Handle!";
+	$obj->{table} 		= delete $args->{'-table'} 	|| warn "No Table!";
+	$obj->{alternateTypes}	= delete $args->{'-alternateTypes'};		# Alternate Fieldtypes
+	$obj->{debug} 		= delete $args->{'-debug'}	|| 0;		# Debug Mode
+	$obj->{update} 		= delete $args->{'-update'};			# Update Fields
+	$obj->{insert} 		= delete $args->{'-insert'};			# Insert Fields
+	$obj->{link} 		= delete $args->{'-link'};			# Link Fields
+	$obj->{required} 	= delete $args->{'-required'};			# Required Fields
+	$obj->{images} 		= delete $args->{'-images'};			# display Images for Field
+	$obj->{readonly}	= delete $args->{'-readonly'};			# Readonly Fields
+	$obj->{default}		= delete $args->{'-default'};			# Default Fields
+	$obj->{events}		= delete $args->{'-events'};			# Add Events
+	$obj->{editId}		= delete $args->{'-editId'}	|| 0;		# Allow edit the ID
+	$obj->{test_cb}		= delete $args->{'-test_cb'};			# Test Callbacks after dialog
+	$obj->{validate_cb}	= delete $args->{'-validate_cb'};		# Validate Callbacks in dialog (after KeyEvents)
+	$obj->{cancel_cb}	= delete $args->{'-cancel_cb'};			# Callback on Cancelbutton
+	$obj->{noChange}	= delete $args->{'-noChange'}; 			# Functions no Change 'insert,update,delete' or 'all' 
+	$obj->{addButtons}	= delete $args->{'-addButtons'}; 		# add buttons to DialogBox 
+	
+	$obj->SUPER::Populate($args);
+
+	$obj->ConfigSpecs(
+        -editRecord   	=> [qw/METHOD  editRecord      EditRecord/,   undef ],
+        -deleRecord	=> [qw/METHOD  deleRecord      DeleRecord/,   undef ],
+        -newRecord	=> [qw/METHOD  newRecord       NewRecord/,    undef ],
+        -Table_is_Change=> [qw/METHOD  Table_is_Change Table_IS_Change/, 	undef ],
+	);
+
+	# Superoptions
+	$obj->optionAdd("*tearOff", "false");
+
+	# Bitmap Stuff
+	$obj->load_pics;
+
+	Tk::FBox->import('as_default');
+} # end Populate
+
+
+# Class private methods;
+# ------------------------------------------
+sub getFields {
+# ------------------------------------------
+	my $obj = shift or return warn("No object");
+	my $table = $obj->{table};
+
+	my $sth = $obj->{dbh}->prepare("select * from $table limit 0,0");
+	$sth->execute();
+	my $field_names = $sth->{'NAME'};
+
+	return $field_names;
+}
+
+
+# ------------------------------------------
+sub SaveToDB {
+# ------------------------------------------
+	my $obj 	= shift or return warn("No object");
+	my $save	= shift or return warn("No Data!");
+	my $id		= shift;
+	my $dbh 	= $obj->{dbh};
+	my $table	= $obj->{table};
+	my $fieldtypes = $obj->getFieldTypes() 
+		or return $obj->error('What!! No Fieldtypes???');
+	my ($sql);
+
+	my( @names, @values );
+	foreach my $name (sort keys %$save) {
+		next if($name eq 'TYPUSXPIX');
+		# Test auf Required
+		if( ! $save->{$name} && $obj->{required}->{$name} ) {
+			$obj->error("<${name}> is a required field!");
+			return;
+	        }
+
+		# Tests vom User 
+		if(defined $obj->{test_cb}->{$name} and ref $obj->{test_cb}->{$name} eq 'CODE') {
+			my $erg = &{$obj->{test_cb}->{$name}}($save, $name);
+			if($erg && $erg eq 'NOMESSAGE') {
+				return $erg;
+			} elsif($erg) { 
+				return $obj->error($erg);
+			}
+		}
+		
+		
+		if($name =~ /passwor[d|t]/i && $save->{$name}) {
+			push(@names, "$name = PASSWORD(?)");
+			push(@values, $save->{$name});
+		} elsif($name =~ /INET_NTOA\((.+?)\)/i) {
+			push(@names, "$1 = INET_ATON(?)");
+			push(@values, $save->{$name});
+		} elsif($fieldtypes->{$name}->{Type} =~ /(date|time)/i) {
+			push(@names, "$name = FROM_UNIXTIME(?)");
+			push(@values, $save->{$name});
+		} else {		
+			push(@names, "$name = ?");
+			push(@values, $save->{$name});
+		}
+	}
+
+	if(defined $save->{TYPUSXPIX} && $save->{TYPUSXPIX} eq 'update') {
+		$sql = sprintf('UPDATE %s SET %s WHERE %s = %s',
+				$table,
+				join(',', @names),
+				$obj->{update}->[0],				
+				$id
+			);
+	} elsif($save->{TYPUSXPIX} eq 'insert') {
+		$sql = sprintf('REPLACE %s SET %s',
+				$table,
+				join(',', @names),
+			);
+	}
+
+	$obj->debug($sql);	
+	my $erg = $dbh->do($sql, 0, @values); 
+	unless($erg) {
+		$obj->error($DBI::errstr);
+		return;
+	} else {
+		$obj->{Last_Insert_Id} = $dbh->{'mysql_insertid'}
+			if($save->{TYPUSXPIX} eq 'insert');
+		$obj->{Last_Edit_Id} = $id
+			if($save->{TYPUSXPIX} eq 'update');
+		return $erg;
+	}
+}
+
+# ------------------------------------------
+sub getFieldTypes {
+# ------------------------------------------
+	my $obj 	= shift or return warn("No object");
+	my $dbh 	= $obj->{dbh};
+	my $table	= $obj->{table};
+
+	return $obj->{$table}->{fieldtypes}
+		if(defined $obj->{$table}->{fieldtypes});
+
+	
+	my $ret = $dbh->selectall_hashref("show fields from $table", 'Field')
+		or return $obj->debug($dbh->errstr);
+
+	$obj->{$table}->{fieldtypes} = $ret; 
+	return $ret;
+}
+
+# ------------------------------------------
+sub Table_is_Change {
+# ------------------------------------------
+	my $obj 	= shift or return warn("No object");
+	my $lasttime	= shift or return 1;	# No last time, first request!
+	my $table	= shift || $obj->{table};
+
+	my $dbh 	= $obj->{dbh};
+	my $ret = 0;
+
+	my $data = $dbh->selectall_hashref(sprintf("SHOW TABLE STATUS LIKE '%s'", $table),'Name')
+		or return $obj->debug($dbh->errstr);
+
+	my $unixtime = $obj->getSqlArray(sprintf("select UNIX_TIMESTAMP('%s')", $data->{$table}->{Update_time}));
+	if($unixtime->[0][0] > $lasttime) {
+		return 1;
+	}
+}
+
+# ------------------------------------------
+sub _readonly_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+	$save->{$name} = $obj->{readonly}->{$name} || $value;
+	my $entry = $dialog->Label( -text => (defined $value && $save->{$name} ne $value ? sprintf('%s [%s]', $save->{$name}, (defined $value ? $value : '-')) :  $save->{$name}));
+	return $entry;
+}                                                                                  
+
+# ------------------------------------------
+sub _link_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+	my ($n,$list);
+	my $options;
+	if( $obj->Table_is_Change($obj->{'link'}->{$name}->{last_refresh}, $obj->{'link'}->{$name}->{table}) ) {
+		$obj->{'link'}->{$name}->{options} = $options = $obj->getSqlArray(
+			sprintf("select (%s + 0), %s from %s %s order by %s", 
+				$obj->{'link'}->{$name}->{id},
+				$obj->{'link'}->{$name}->{display},
+				$obj->{'link'}->{$name}->{table},
+				$obj->{'link'}->{$name}->{where} || '',
+				$obj->{'link'}->{$name}->{display},
+			)
+		);
+		$obj->{'link'}->{$name}->{last_refresh} = time;
+	} else {
+		$options = $obj->{'link'}->{$name}->{options}	
+	}
+	my $entry = $dialog->JBrowseEntry(
+		-width => 20,
+		-variable  => \$n,
+		-browsecmd => sub { $save->{$name} = (defined $n and exists $list->{$n} ? $list->{$n} : $n) },
+	);
+
+	$entry->insert( "end", '' );
+	foreach my $z ( @$options ) {
+		$list->{ $z->[1] } = $z->[0];
+		$n = $z->[1]
+		  if ( defined $value && $z->[0] == $value );
+		$entry->insert( "end", $z->[1] );
+	}
+
+	if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+		$entry->Subwidget("entry")->configure(
+			validate => 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}}, $entry, $save, $options ], 
+		);
+	}elsif(defined $obj->{validate_cb}->{$name}->{'-callback'} ) {
+		$entry->Subwidget("entry")->configure(
+			validate => $obj->{validate_cb}->{$name}->{'-event'} || 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}->{'-callback'}}, $entry, $save ], 
+		);
+	}
+
+	$save->{$name} = (defined $n and defined $list->{$n} ? $list->{$n} : $n);
+	$save->{$name} = $n = $value unless($n and $value);
+	return $entry;
+}                                                                                  
+
+# ------------------------------------------
+sub _time_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save, $feldtyp) = @_;
+	
+	if(uc($value) eq 'NOW' || uc($save->{$name}) eq 'NOW') {
+		$save->{$name} = time;
+	} elsif($value) {
+		$value = $obj->{dbh}->quote($value);
+		my $time = $obj->getSqlArray("select UNIX_TIMESTAMP($value)");
+		$save->{$name} = $time->[0][0];
+	}
+	my $entry = $dialog->Date(
+		-fields => ( $feldtyp eq 'date' ? 'date' : 'both' ),
+		-variable => \$save->{$name},
+	);
+	$obj->debug("Time: ".$save->{$name});
+	return $entry;
+}                                                                                  
+
+# ------------------------------------------
+sub _choice_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save, $label) = @_;
+
+	my $mode = $1;
+	my $options = $2;
+
+	$options =~ s/\'//sig;
+	my @list = sort split ( ',', $options );
+	my $z    = -1;
+	my $entry;
+	$save->{$name} = $value;
+	if( $mode eq 'enum' ) {
+		$entry = $dialog->JBrowseEntry(
+			-width	   => 20,
+			-state     => 'readonly',
+			-variable  => \$save->{$name},
+			-choices   => \@list,
+		);
+
+		return $entry;
+	} elsif($mode eq 'set') {
+		foreach my $e (@list) {
+			$e =~ s/'//sig;
+			push (
+				@{ $save->{$name} },
+				( defined $e && $value =~ /$e/ ? $e : undef )
+			);
+			$entry = $dialog->Checkbutton(
+				variable => \$save->{$name}->[$z],
+				text     => ucfirst($e),
+				onvalue  => $e,
+				offvalue => 0,
+			);
+			$label->grid( $entry, -sticky => 'nw' );
+		}
+	}
+}   
+
+# ------------------------------------------
+sub _decimal_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = $value;
+	my $entry = $dialog->Entry(
+		-textvariable => \$save->{$name},
+	);
+
+	if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+		$entry->configure(
+			validate => 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}}, $entry, $save ], # Input is follow!
+		);
+	} elsif(defined $obj->{validate_cb}->{$name}->{'-callback'} ) {
+		$entry->configure(
+			validate => $obj->{validate_cb}->{$name}->{'-event'} || 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}->{'-callback'}}, $entry, $save ], 
+		);
+	}
+
+	return $entry;
+}
+
+# ------------------------------------------
+sub _integer_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = $value;
+	my $entry = $dialog->NumEntry(
+		-textvariable => \$save->{$name},
+	);
+
+	return $entry;
+}  
+
+# ------------------------------------------
+sub _password_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = '';
+	my $entry = $dialog->Entry(
+		-textvariable => \$save->{$name},
+		-show         => '*',
+	);
+
+	if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+		$entry->configure(
+			validate => 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}}, $entry, $save ], # Input is follow!
+		);
+	} elsif(defined $obj->{validate_cb}->{$name}->{'-callback'} ) {
+		$entry->configure(
+			validate => $obj->{validate_cb}->{$name}->{'-event'} || 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}->{'-callback'}}, $entry, $save ], 
+		);
+	}
+
+	return $entry;
+}  
+
+
+# ------------------------------------------
+sub _file_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = $value;
+	my $frame = $dialog->Frame(
+	);
+	my $entry = $frame->Entry(
+		-textvariable => \$save->{$name},
+		-state => 'disabled',
+	)->pack(-side => 'left');
+	my $button = $frame->Button(
+		-image => $obj->{icons}->{icon_openfile},
+		-command => sub{
+			my $file;
+			my $old_file = $save->{$name};
+			$save->{$name} = $file if($file = $obj->getOpenFile(-initialdir => $obj->{alternateTypes}->{directory}));
+			if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+				&{$obj->{validate_cb}->{$name}}($entry, $save, $old_file), # Input is follow!
+			}
+		},
+	)->pack(-side => 'left');
+
+
+	return $frame;
+}  
+
+# ------------------------------------------
+sub _string_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = $value;
+	my $entry = $dialog->Entry(
+		-textvariable => \$save->{$name},
+	);
+
+	if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+		$entry->configure(
+			validate => 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}}, $entry, $save ], 
+		);
+	} elsif(defined $obj->{validate_cb}->{$name}->{'-callback'} ) {
+		$entry->configure(
+			validate => $obj->{validate_cb}->{$name}->{'-event'} || 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}->{'-callback'}}, $entry, $save ], 
+		);
+	}
+
+	return $entry;
+}  
+
+# ------------------------------------------
+sub _text_widget {
+# ------------------------------------------
+	my ( $obj, $dialog, $name, $value, $save) = @_;
+
+	$save->{$name} = $value;
+	my $entry = $dialog->Scrolled('Text',
+		-scrollbars => 'osoe',
+		-width => 20,
+		-height => 5,
+	);
+	$entry->insert('end', $save->{$name});
+	# Register no variables Widget
+	$obj->{gets}->{$name} = sub {
+			$save->{$name} = $entry->get('1.0', 'end');
+			$save->{$name} =~ s/\n+$//s;
+		};
+	
+	return $entry;
+}  
+ 
+
+# ------------------------------------------
+sub makeForm {
+# ------------------------------------------
+	my ( $obj, $main, $erg, $typ, $opt ) = @_;
+	my ( $save, $pic );
+	my $rows   = $erg;
+	$save->{TYPUSXPIX} = (grep(/\S+/, @$rows) ? 'update' : 'insert');	
+	my $fields = (defined $obj->{$save->{TYPUSXPIX}} ? $obj->{$save->{TYPUSXPIX}} : $obj->getFields);
+	my $fieldtypes = $obj->getFieldTypes() 
+		or $obj->debug('What!! No Fieldtypes???');
+
+
+	my $dialog = $main->Frame(
+	)->pack( -fill => 'both', expand => 1 );
+
+	my $c = -1;
+	my $required;
+	foreach my $name (@$fields) {
+		$c++;
+		next if(! $c && ! $obj->{editId});
+
+		my $namedisplay = $1 if($name =~ /AS\s+(\S+)/i);
+		my $value = $rows->[0][$c] || $opt->{default}->{$name} || (defined $fieldtypes->{$name}->{Default} and $fieldtypes->{$name}->{Default} ne 'NULL' ? $fieldtypes->{$name}->{Default} : undef);
+		my $feldtyp = $fieldtypes->{$name}->{Type};
+		$feldtyp = $obj->{alternateTypes}->{$name}->{type} 
+			if(defined $obj->{alternateTypes}->{$name}->{type});
+		my $NotNull = $name if($obj->{required}->{$name});
+		$required = $NotNull unless($required);
+
+		my $label = $dialog->Label(
+			-fg 	 => ($NotNull ? 'red' : 'black'),
+			-justify => 'left',
+			-text    => ($namedisplay || $name).($NotNull ? '*' : ''),
+		);
+
+		my $image = $dialog->Label(
+			-image	 => $obj->{images}->{$name},
+		);
+
+
+		if (defined $obj->{readonly}->{$name} ) {
+			$obj->{entrys}->{$name} = $obj->_readonly_widget($dialog, $name, $value, $save);
+		} elsif ( defined $obj->{'link'}->{$name} ) {
+			$obj->{entrys}->{$name} = $obj->_link_widget($dialog, $name, $value, $save);
+		} elsif ( $feldtyp =~ /(time|date|timestamp)/i ) {
+			$obj->{entrys}->{$name} = $obj->_time_widget($dialog, $name, $value, $save, $feldtyp);
+		} elsif ( $feldtyp =~ /^(enum|set)\((.+)\)/i ) {
+			$obj->{entrys}->{$name} = $obj->_choice_widget($dialog, $name, $value, $save, $label);
+		} elsif ( $feldtyp =~ /(int|float|double|real|numeric)/i ) {
+			$obj->{entrys}->{$name} = $obj->_integer_widget($dialog, $name, $value, $save);
+		} elsif ( $feldtyp =~ /decimal/i ) {
+			$obj->{entrys}->{$name} = $obj->_decimal_widget($dialog, $name, $value, $save);
+		} elsif ( $feldtyp =~ /text/i ) {
+			$obj->{entrys}->{$name} = $obj->_text_widget($dialog, $name, $value, $save);
+		} elsif ( $feldtyp eq 'file' ) { # SPEZIAL TYPES
+			$obj->{entrys}->{$name} = $obj->_file_widget($dialog, $name, $value, $save);
+		} elsif ( $feldtyp eq 'password' ) {
+			$obj->{entrys}->{$name} = $obj->_password_widget($dialog, $name, $value, $save);
+		} else {
+			$obj->{entrys}->{$name} = $obj->_string_widget($dialog, $name, $value, $save);
+		}
+		$obj->Advertise(sprintf('wi_%s', $name) => $obj->{entrys}->{$name});
+
+		
+		$label->grid( $image, $obj->{entrys}->{$name}, -sticky => 'nw' );
+	}
+
+	if($required) {
+		$dialog->Label(
+			-fg 	 => 'red',
+			-justify => 'left',
+			-text    => '*) is required. ',
+		)->grid( 
+			$dialog->Label(
+				-text => ''
+			), -sticky => 'nw' );
+	}
+
+	return $save;
+}
+
+# ------------------------------------------
+sub deleRecord {
+# ------------------------------------------
+	my $obj = shift || warn "Kein Objekt!";
+	my $w  = shift || warn "Keine Widget bei editRecord";
+	my $idx = $obj->{fields}->[0];
+	my $id = shift;
+	my $table = $obj->{table};
+
+	$b = $obj->messageBox(
+		-message => "Sorry, no id to delete", 
+		-type => 'Ok',
+		) unless($id);
+
+	my $answer = $w->messageBox(
+		-message => 'Are you sure?', 
+		-title => "Delete Row from ".$table, 
+		-type => 'okcancel', 
+		-default => 'cancel'); 
+
+	$obj->type('delete');
+
+	if ( $answer =~ /ok/i) {
+		my $info;
+		my $sql = sprintf("DELETE FROM %s WHERE %s = %d",
+					$table,
+					$idx,
+					$id);
+		$obj->debug($sql);
+		$info = $obj->{dbh}->do($sql) 
+			or $obj->error($obj->{dbh}->error);
+		$obj->messageBox(-message => "Error! ".$obj->error )
+			unless($info && $info ne '0E0');
+	}
+}
+
+# ------------------------------------------
+sub newRecord {
+# ------------------------------------------
+	my $obj = shift || warn "Kein Objekt!";
+	my $options = shift;
+	delete $obj->{Last_Insert_Id};	
+	$obj->editRecord(0, $options);
+}
+
+# ------------------------------------------
+sub editRecord {
+# ------------------------------------------
+	my $obj = shift || warn "Kein Objekt!";
+	my $id = shift;
+	my $opt = shift;
+	delete $obj->{Last_Edit_Id};	
+
+	$obj->type( $id ? 'update' : 'insert');
+
+	my $sql = $obj->makeSql($id);
+	my $erg = $obj->getSqlArray($sql);
+	my $save = {};
+
+
+	my @buttons;
+	if(defined $obj->{addButtons}) {
+		foreach my $bname (sort keys %{$obj->{addButtons}}) {
+			push(@buttons, $bname)
+				if(ref $obj->{addButtons}->{$bname} eq 'CODE' or grep(/$obj->{TYPE}/i, @{$obj->{addButtons}->{$bname}->{'-type'}}));
+		}
+	}
+
+	my $dialog = $obj->XDialogBox(
+		-title          => ($id ? 'Save' : 'Insert')." Record ".$obj->{table},
+		-buttons        => [ ($id ? 'Save' : 'Insert'), @buttons, 'Cancel' ],
+		-default_button => ($id ? 'Save' : 'Insert'),
+		-check_callback => sub {
+			my $answer = shift;
+			if ( $answer eq 'Save' or $answer eq 'Insert') {
+				foreach my $sub (keys %{$obj->{gets}}) {
+					&{$obj->{gets}->{$sub}};
+				}
+				$obj->{info} = $obj->SaveToDB( $save, $id );
+				if(defined $obj->{info} and $obj->{info} eq 'NOMESSAGE') {
+					return undef;		# Zurueck ohne Fehlermeldung
+				} elsif($obj->{info}) { 
+					return $obj->{info};	# Zurueck
+				} else {	   # Zurueck mit Fehlermeldung
+					$b = $obj->messageBox(-message => sprintf("Error: %s", $obj->error), 
+							      -type => 'Ok',
+							       );
+					return undef;
+				}
+			} elsif($answer eq 'Cancel' and defined $obj->{cancel_cb} and ref $obj->{cancel_cb} eq 'CODE') {
+				&{$obj->{cancel_cb}}($save);
+			}
+			return 1;
+		},
+	);
+	$dialog->resizable(0,0);
+
+	$obj->{SAVE} = $save = $obj->makeForm( $dialog, $erg, 'edit', $opt );
+
+	foreach my $button (@buttons) {
+		if(ref $obj->{addButtons}->{$button} eq 'CODE') {
+			$dialog->Subwidget(sprintf('B_%s', $button))->configure(
+				-command => [\&{$obj->{addButtons}->{$button}}, $save],
+				);
+		} elsif(defined $obj->{addButtons}->{$button}->{'-callback'} and ref $obj->{addButtons}->{$button}->{'-callback'} eq 'CODE') {
+			$dialog->Subwidget(sprintf('B_%s', $button))->configure(
+				-command => [\&{$obj->{addButtons}->{$button}->{'-callback'} }, $save],
+				);
+		}
+	}
+
+	$dialog->Focus( $obj->{entrys}->{$opt->{FOCUS}} ) 
+		if (defined $opt->{FOCUS} and defined $obj->{entrys}->{$opt->{FOCUS}});
+
+	foreach my $event ( keys %{$obj->{events}} ) {
+		$dialog->bind( $event => $obj->{events}->{$event} )
+			if(ref $obj->{events}->{$event} eq 'CODE');
+	}
+	$dialog->bind('<Return>' => sub{});
+	my $answer = $dialog->Show(-nograb);
+}
+
+# ------------------------------------------
+sub type {
+# ------------------------------------------
+	my $obj = shift;
+	my $typ = shift;
+	if(defined $typ) {
+		$obj->{TYPE} = $typ;		
+	}
+	return $obj->{TYPE};
+} 
+
+
+# ------------------------------------------
+sub makeSql {
+# ------------------------------------------
+	my $obj = shift or warn("No object");
+	my $id = shift; 
+	my $table = $obj->{table};
+	my $fields = (defined $id && $id ? ( $obj->{update} || $obj->{insert} || $obj->getFields) : ($obj->{insert} || $obj->getFields) );
+	my ($where, $limit, $order, $whereid);	
+
+	unless($id) {        
+	        # Limit
+	        if ($obj->{limit}) {
+			$limit = sprintf("LIMIT %d, %d", $obj->{offset}, $obj->{limit} + 1); 
+		}
+	
+	        # Order
+	        if ($obj->{order}) {
+			$order = sprintf("ORDER BY %s %s", 
+					join(',', @{$obj->{order}}), 
+					$obj->{order_right}); 
+		}
+	
+		# Where
+	        if ($obj->{where}) {
+			$where .= sprintf("WHERE %s %s", 
+					join(' AND ', @{$obj->{where}})); 
+		}
+
+		# Statement für insert
+		if(defined $id && $id == 0) {
+			$where .= sprintf("%s (1 = 0)", 
+					($obj->{where} ? ' AND ' : ' WHERE ')
+					); 
+		}
+
+		# Search
+	        if ($obj->{search_txt}) {
+			$where .= sprintf("%s %s LIKE '%%%s%%'", 
+					($obj->{where} ? ' AND ' : ' WHERE '),  
+					($obj->{search_row} eq 'AssignedAddr' ? 'INET_NTOA(AssignedAddr)' : $obj->{search_row}), #XXX hier noch was einfallen lassen
+					$obj->{search_txt},
+					); 
+		}
+
+		# Timerange
+	        if ($obj->{search_time_to} && $obj->{search_time_from} && $obj->{search_with_time}) {
+			my @timerange;
+			foreach my $timefield (@{$obj->{timefields}}) {
+				push(@timerange, sprintf(
+						'(%s BETWEEN FROM_UNIXTIME(%d) AND FROM_UNIXTIME(%d))',
+						$timefield,
+						$obj->{search_time_from},
+						$obj->{search_time_to}
+						)
+					);			
+			}
+			$where .= sprintf("%s (%s)", 
+					( $obj->{where} || ( $obj->{search_txt} && $obj->{search_row} ) ? ' AND ' : ' WHERE '),
+					join(' OR ', @timerange)); 
+		}
+
+
+	} else {
+		# select a record
+		$where = sprintf("WHERE %s = %d", 
+					$fields->[0],
+					$id); 
+	}	        
+
+	my $retsql = sprintf("SELECT %s from %s %s %s %s",
+			( join(',', @$fields) || '*' ),
+			$table,
+			(defined $where ? $where : ''),
+			(defined $order ? $order : ''),
+			(defined $limit ? $limit : ''),
+			);
+	$obj->debug($retsql); 
+	return $retsql;
+}
+
+
+# ------------------------------------------
+sub getSqlArray {
+# ------------------------------------------
+	my $obj = shift or croak("No object");
+	my $sql = shift or $obj->{sql} or warn 'No Sql';
+	my $dbh = $obj->{dbh};
+
+	my $sth = $dbh->prepare($sql) or warn("$DBI::errstr - $sql");
+	$sth->execute or warn("$DBI::errstr - $sql");
+	return $sth->fetchall_arrayref;
+}
+
+# ------------------------------------------
+sub debug {
+# ------------------------------------------
+	my $obj = shift;
+	my $msg = shift || return;
+	return unless $obj->{debug};
+	printf("\nInfo: %s\n", $msg); 
+} 
+
+# ------------------------------------------
+sub error {
+# ------------------------------------------
+	my $obj = shift;
+	my $msg = shift;
+	$obj->bell;
+	unless($msg) {
+		my $err = $obj->{error};
+		$obj->{error} = '';
+		return $err;
+	}
+	$obj->{error} = sprintf($msg, @_);
+	return undef;
+} 
+
+# ------------------------------------------
+sub qsure {
+# ------------------------------------------
+	my ( $w, $question ) = @_;
+	my $a = $w->messageBox(
+		-message => $question,
+		-title   => "Sure?",
+		-type    => 'okcancel',
+		-default => 'ok',
+	);
+	return 1 if ( $a =~ /Ok/i );
+}
+
+
+# ------------------------------------------
+sub load_pics {
+# ------------------------------------------
+	my $obj = shift or return warn("No object");
+	my %pics;
+	my $data;
+
+        $data        = <<"--EOD--";
+R0lGODlhDwAPAIAAAP///0NdjSH5BAAAAAAALAAAAAAPAA8AAAIgjI+pu+BuADsy1GYjqxzrnFyI
+CCoiOU6hmlLP+7DyVAAAOw==
+--EOD--
+	$obj->{icons}->{icon_openfile} = $obj->Photo(-data => $data);
+
+	return %pics;
+}
+
+
+1;
+
+__END__
+
+
+=head1 NAME
+
+Tk::DBI::Form 
+
+=head1 SYNOPSIS
+
+	my $mw = MainWindow->new;
+	my $tkdbi = $mw->DBIForm(
+		-dbh   		=> $dbh,
+		-table  	=> 'Inventory',
+		-editId		=> 'yes',
+		-readonly => {
+			changed_by => 'xpix',
+			created => 'NOW',
+			...
+			},
+		-required => {
+			name => 1,
+			state => 1,
+			owner => 1,
+			...
+			},
+		-test_cb => {
+			type_id => sub{
+				my ($save, $name) = @_;
+				if($save->{type_id} and $save->{type_id} !~ /^\d+$/) {
+					$dbh->do(sprintf("INSERT INTO Type (name) VALUES ('%s')", $save->{type_id}));
+					$save->{type_id} = $dbh->{'mysql_insertid'};				
+				}
+				return undef; # Alles ok!
+			},
+			...
+		},
+		-link => {
+			type_id => {
+				table 	=> 'Type',
+				display	=> 'name',
+				id	=> 'id',
+			},
+			...
+		},
+		-validate_cb => {
+			serial_no => sub {
+				my ($entry, $save, $input) = @_;
+				$save->{id} = 0 unless(defined $save->{id});
+				$entry->configure( 
+					-bg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'red' : 'green' ),
+					-fg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'white' : 'black' ),
+					 );
+				return 1 ;
+			},
+			...
+		},
+		-images => {
+			id 	  => $pics{F1},
+			parent_id => $pics{F2},
+			...
+		},
+		-events => {
+			'<KeyRelease-F1>' => sub { 
+					$DBIFORM->{entrys}->{id}->focus; 
+			},
+			...
+		}, 
+		-addButtons => {
+			Logs => {
+				-type => ['update'],
+				-callback => sub{
+					my ($save, $name) = @_;
+					&launch_browser_log($save->{id});				
+				}, 
+			},
+			...,
+		},
+		-alternateTypes => {
+			filename => {
+				type => 'file',
+				directory => $DOCUPATH,
+			},
+			...
+		},
+	
+		-debug => 1,
+	);
+	
+	my $ok = $tkdbi->editRecord($row->{id});
+
+
+=head1 DESCRIPTION
+
+Tk::DBI::Form is a Megawidget to allow edit, delete or insert a record from a table. 
+
+=head1 OPTIONS
+
+=head2 -dbh
+
+The database handle to get the information from Database.
+
+=head2 -table
+
+The table where you will change the data.
+
+=head2 -debug => 1
+
+Switch the debug output at the standart console on.
+
+=head2 -edit_id => 1
+
+This allows to edit the ID-Number, this is normaly a unique and autoincrement Field for every column.
+
+=head2 -update => [qw(id col1 col2 ...)]
+
+This is the list to allow update following Fields. Only this fields is display in the update Form. 
+
+=head2 -insert => [qw(id col1 col2 ...)]
+
+This is the list to allow insert following Fields. Only this fields is display in the insert Form. 
+
+=head2 -link => { col1 => {table => tablename, display => col2, id => idcol, where => 'WHERE col3 = 1'}, ... }
+
+This is a special Feature for Fields in a another Table. Often we use other datas from tables, this data have a id number and a description. The id number from this table is mostly in the table to edit as id number. Here you can display the Description for this id and the user can change this choice. I.e.:
+
+  -link => {
+	parent_id => {
+		table 	=> 'Inventory',
+		display	=> 'name',
+		where	=> 'WHERE type_id = 1', 
+		id	=> 'id',
+	},
+	type_id => {
+		table 	=> 'Type',
+		display	=> 'name',
+		id	=> 'id',
+	},
+  }
+
+Ok, here we have two linktables. This will display a Listwidget, thes have the column 'name' to display in this Listbox. But the form write the id in the original column.
+
+
+=head2 -required => { col1 => 1, col2 = 1, ...}
+
+Here you can mark the required field for the Form, the form will display a error MessageBox to display 'col1 is a required field!'.
+
+  -required => {
+	changed_by => 1,
+	deadline => 1,
+	Server => 1,
+  } 
+
+
+=head2 -readonly => { col1 => 'text', col2 = number, ...}
+
+This will display the values and the user can't change this data.
+
+  -readonly => {
+	changed_by => $USER,
+	deadline => 'NOW',
+	Server => $HOST,
+  } 
+
+
+=head2 -default => { col1 => 'text', col2 = number, ...}
+
+This will display default values for the form. I.e.:
+
+  -default => {
+	changed_by => $USER,
+	deadline => 'NOW',
+	Server => $HOST,
+  } 
+
+=head2 -images => { col1 => ImageObj, col2 = ImageObj, ...}
+
+This will display a little Icon next to the input or whatever widget.
+
+=head2 -alternateTypes => { col1 => ImageObj, col2 = ImageObj, ...}
+
+Here you can get a alternativeType to display. I.E.:
+
+  -alternateTypes => {
+	filename => {
+		type => 'file',
+		directory => $DOCUPATH,
+	},
+	password => {
+		type => 'password',
+	},
+  },
+
+=over 4
+
+=item file
+
+This will display a entry and button, the user can click on this button and form will display a Fileselector for get the right file and path.
+
+=item password
+
+This will display a entry with hidden letters as stars..
+
+=back
+
+=head2 -events => { Event => sub{}, Event => sub{}, ...}
+
+This will add your personal events whatever you need. I.E.:
+
+  -events => {
+	'<KeyRelease-F1>' => sub { 
+			$DBIFORM->{entrys}->{id}->focus; 
+   },
+
+
+=head2 -validate_cb => { col1 => sub{}, col2 => sub{}, ...}
+
+Here you can add a callback to test the input from the user in realtime. The parameter for the subroutine is the entry, save hash with data from the Form ans the input from the User. I.E.:
+
+
+  serial_no => sub {
+	my ($entry, $save, $input) = @_;
+	$save->{id} = 0 unless(defined $save->{id});
+	$entry->configure( 
+		-bg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'red' : 'green' ),
+		-fg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'white' : 'black' ),
+		 );
+	return 1 ;
+  },
+
+This change the foreground and background color from the entry when the serial number exist in the table. The subroutine can return a undef value, then the widget ignoring this Userinput. I.e.:
+
+  only_numbers => sub {
+	my ($entry, $save, $input) = @_;
+	return undef unless($input =~ /[^0-9]+/);
+	return 1 ;
+  },
+
+
+=head2 -test_cb => { col1 => sub{}, col2 => sub{}, ...}
+
+Here you can add a callback to test the user input AFTER submit this form. The parameter for the subroutine is the save hash and the name from this field. I.E.:
+
+  -test_cb => {
+	id => sub{
+		my ($save, $name) = @_;
+		if($DBIFORM->type() eq 'insert' and $save->{id}) {
+			my $answer = qsure($top,sprintf('You will REPLACE row <%s>?', $save->{id}));
+			return 'NOMESSAGE' unless($answer);  # Back without message
+		}
+		return undef; # All OK ...
+	},
+	parent_id => sub{
+		my ($save, $name) = @_;
+		my $pid = sprintf('%010d', $save->{parent_id});
+		unless(exists $INV->{$pid}) {
+			my $msg = sprintf('Parent ID %s not exists', $pid);
+			return $msg;
+		}
+		return undef; # All OK!
+	},
+  }
+
+
+The first example will pop up a MessageBox when the User make a Insert with a id number (replace). The second example will reformat the parent_id Number to 0000000012. If the parent_id doesnt exist in the Hash, the will return a Errormessage (MessageBox) with the returned text. 'NOMESSAGE' as return doesnt pop up a MessageBox. Return undef, all ok.
+
+
+=head2 -cancel_cb => sub{ }
+
+Here you can add a callback when the User activate the Cancel Button.
+
+=head2 -addButtons => { ButtonName => {-type => ['update', 'insert'], -callback => sub{} }
+
+Here you can add a Button to the FormBox. The -type option will only display the button in the following state (insert, update or delete). The callback has one parameter. The save hash.  I.e.:
+
+		-addButtons => {
+			Logs => { 
+				-type => ['update'],
+				-callback => sub{
+					my ($save, $name) = @_;
+					&launch_browser_log($save->{id});				
+				}, 
+			},
+		},
+
+The example will display a logbrowser when the user click on the Button 'Logs'.
+
+
+=head1 METHODS
+
+=head2 editRecord(id);
+
+This will display the update form with the following id number for update.
+
+=head2 newRecord([id]);
+
+This will display the insert form with the following id number for Replace.
+
+  my $datahash = $DBH->selectall_hashref(select * from table where id = 12);
+  delete $datahash->{id};
+  $DBIFORM->newRecord(
+	{
+		default => $datahash,
+	},	
+  );
+
+Here you see a trick to copy a column, also display a insert form with the values from column 12.
+
+=head2 deleRecord(id);
+
+This will display the delete form with the following id number for Delete.
+
+=head2 Table_is_Change(last_time, 'tablename');
+
+This return true when the table is changed at the last_time (seconds at epoche).
+
+=head1 ADVERTISED WIDGETS
+
+The Widgets in the form is advertised with 'wi_namecolumn'.
+
+=head1 AUTHOR
+
+xpix@netzwert.ag
+
+Copyright (C) 2003 , Frank (xpix) Herrmann. All rights reserved.
+
+This program is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.
+
+=head1 KEYWORDS
+
+Tk::JBrowseEntry, Tk::XDialogBox, Tk::NumEntry, Tk::Date, Tk::LabFrame, Tk::FBox
+
+
+=cut
