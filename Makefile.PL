@@ -5,7 +5,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile (
 	'NAME'		=> 'Tk::DBI::Form',
 	'DISTNAME'	=> 'Tk-DBI-Form',
-	'VERSION'	=> '0.03',
+	'VERSION'	=> '0.04',
 	'AUTHOR'	=> 'Frank Herrmann <xpix@netzwert.ag>',
 	'PREREQ_PM' 	=> { 	'Tk' => 0, 
 				'Tk::JBrowseEntry' => 0,

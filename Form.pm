@@ -2,8 +2,8 @@ package Tk::DBI::Form;
 #------------------------------------------------
 # automagically updated versioning variables -- CVS modifies these!
 #------------------------------------------------
-our $Revision           = '$Revision: 1.7 $';
-our $CheckinDate        = '$Date: 2003/05/04 20:53:39 $';
+our $Revision           = '$Revision: 1.14 $';
+our $CheckinDate        = '$Date: 2003/08/13 12:30:26 $';
 our $CheckinUser        = '$Author: xpix $';
 # we need to clean these up right here
 $Revision               =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
@@ -22,7 +22,6 @@ use Tk::FBox;
 use Tk::ROText;
 
 use Date::Manip;
-use Data::Dumper;
 
 use base qw/Tk::Frame/;
 
@@ -58,6 +57,7 @@ sub Populate {
 	$obj->{table} 		= delete $args->{'-table'} 	|| warn "No Table!";
 	$obj->{alternateTypes}	= delete $args->{'-alternateTypes'};		# Alternate Fieldtypes
 	$obj->{debug} 		= delete $args->{'-debug'}	|| 0;		# Debug Mode
+	$obj->{lock} 		= delete $args->{'-lock'}	|| 0;		# Lock timeout in seconds
 	$obj->{update} 		= delete $args->{'-update'};			# Update Fields
 	$obj->{insert} 		= delete $args->{'-insert'};			# Insert Fields
 	$obj->{link} 		= delete $args->{'-link'};			# Link Fields
@@ -72,6 +72,7 @@ sub Populate {
 	$obj->{cancel_cb}	= delete $args->{'-cancel_cb'};			# Callback on Cancelbutton
 	$obj->{noChange}	= delete $args->{'-noChange'}; 			# Functions no Change 'insert,update,delete' or 'all' 
 	$obj->{addButtons}	= delete $args->{'-addButtons'}; 		# add buttons to DialogBox 
+	$obj->{addFields}	= delete $args->{'-addFields'}; 		# add user defined fields to DialogBox 
 	
 	$obj->SUPER::Populate($args);
 
@@ -79,7 +80,8 @@ sub Populate {
         -editRecord   	=> [qw/METHOD  editRecord      EditRecord/,   undef ],
         -deleRecord	=> [qw/METHOD  deleRecord      DeleRecord/,   undef ],
         -newRecord	=> [qw/METHOD  newRecord       NewRecord/,    undef ],
-        -Table_is_Change=> [qw/METHOD  Table_is_Change Table_IS_Change/, 	undef ],
+        -dsplRecord	=> [qw/METHOD  dsplRecord      DsplRecord/,   undef ],
+        -Table_is_Change=> [qw/METHOD  Table_is_Change Table_IS_Change/,	undef ],
 	);
 
 	# Superoptions
@@ -122,11 +124,14 @@ sub SaveToDB {
 	my( @names, @values );
 	foreach my $name (sort keys %$save) {
 		next if($name eq 'TYPUSXPIX');
+		next if(defined $obj->{addFields}->{$name});
+
 		# Test auf Required
 		if( ! $save->{$name} && $obj->{required}->{$name} ) {
 			$obj->error("<${name}> is a required field!");
 			return;
 	        }
+
 
 		# Tests vom User 
 		if(defined $obj->{test_cb}->{$name} and ref $obj->{test_cb}->{$name} eq 'CODE') {
@@ -138,7 +143,6 @@ sub SaveToDB {
 			}
 		}
 		
-		
 		if($name =~ /passwor[d|t]/i && $save->{$name}) {
 			push(@names, "$name = PASSWORD(?)");
 			push(@values, $save->{$name});
@@ -148,18 +152,38 @@ sub SaveToDB {
 		} elsif($fieldtypes->{$name}->{Type} =~ /(date|time)/i) {
 			push(@names, "$name = FROM_UNIXTIME(?)");
 			push(@values, $save->{$name});
+		} elsif($fieldtypes->{$name}->{Type} =~ /(\d+).+?zerofill/i) {
+			push(@names, "$name = ?");
+			my $val = sprintf("%0${1}d", ($id || $save->{$name}));
+			push(@values, $val);
 		} else {		
 			push(@names, "$name = ?");
 			push(@values, $save->{$name});
 		}
 	}
 
+
 	if(defined $save->{TYPUSXPIX} && $save->{TYPUSXPIX} eq 'update') {
-		$sql = sprintf('UPDATE %s SET %s WHERE %s = %s',
+		# keys?
+		my $keys = $obj->get_keys();
+		$id =~ s/\#/\\#/sig;
+		my @ids	 = split(/[^0-9a-zA-Z\ ]/, $id);
+		# select a record
+		my $where = 'WHERE ';
+		my $c = 0;
+		foreach my $value (@ids) {
+			$where .= sprintf("%s LIKE '%s%%' ", 
+						$keys->[$c],
+						$value); 
+			$c++;
+			$where .= 'AND '
+				if($c < scalar @ids);
+		}		
+
+		$sql = sprintf('UPDATE %s SET %s %s',
 				$table,
 				join(',', @names),
-				$obj->{update}->[0],				
-				$id
+				$where,
 			);
 	} elsif($save->{TYPUSXPIX} eq 'insert') {
 		$sql = sprintf('REPLACE %s SET %s',
@@ -168,7 +192,8 @@ sub SaveToDB {
 			);
 	}
 
-	$obj->debug($sql);	
+
+	$obj->debug($sql.' Fields: '.join(', ', @values));	
 	my $erg = $dbh->do($sql, 0, @values); 
 	unless($erg) {
 		$obj->error($DBI::errstr);
@@ -204,7 +229,7 @@ sub getFieldTypes {
 sub Table_is_Change {
 # ------------------------------------------
 	my $obj 	= shift or return warn("No object");
-	my $lasttime	= shift or return 1;	# No last time, first request!
+	my $lasttime	= shift || 1;	# No last time, first request!
 	my $table	= shift || $obj->{table};
 
 	my $dbh 	= $obj->{dbh};
@@ -214,6 +239,7 @@ sub Table_is_Change {
 		or return $obj->debug($dbh->errstr);
 
 	my $unixtime = $obj->getSqlArray(sprintf("select UNIX_TIMESTAMP('%s')", $data->{$table}->{Update_time}));
+
 	if($unixtime->[0][0] > $lasttime) {
 		return 1;
 	}
@@ -385,6 +411,19 @@ sub _integer_widget {
 		-textvariable => \$save->{$name},
 	);
 
+	if(defined $obj->{validate_cb}->{$name} and ref $obj->{validate_cb}->{$name} eq 'CODE') {
+		$entry->configure(
+			validate => 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}}, $entry, $save ], # Input is follow!
+		);
+	} elsif(defined $obj->{validate_cb}->{$name}->{'-callback'} ) {
+		$entry->configure(
+			validate => $obj->{validate_cb}->{$name}->{'-event'} || 'all',
+			validatecommand => [ \&{$obj->{validate_cb}->{$name}->{'-callback'}}, $entry, $save ], 
+		);
+	}
+
+
 	return $entry;
 }  
 
@@ -505,6 +544,16 @@ sub makeForm {
 	my $dialog = $main->Frame(
 	)->pack( -fill => 'both', expand => 1 );
 
+	if(defined $obj->{addFields}) {
+		foreach my $name (sort keys %{$obj->{addFields}}) {
+			push(@$fields, $name); 
+			$fieldtypes->{$name}->{Type} = $obj->{addFields}->{$name}->{type}
+				or return error('I need a field type in addFields!');
+			$fieldtypes->{$name}->{Default} = $obj->{addFields}->{$name}->{value}
+				if(defined $obj->{addFields}->{$name}->{value});
+		}
+	}
+
 	my $c = -1;
 	my $required;
 	foreach my $name (@$fields) {
@@ -575,25 +624,24 @@ sub makeForm {
 sub deleRecord {
 # ------------------------------------------
 	my $obj = shift || warn "Kein Objekt!";
-	my $w  = shift || warn "Keine Widget bei editRecord";
-	my $idx = $obj->{fields}->[0];
 	my $id = shift;
+	my $nowarn = shift || 0;
+	my $idx = $obj->{update}->[0] || $obj->{insert}->[0];
 	my $table = $obj->{table};
 
-	$b = $obj->messageBox(
-		-message => "Sorry, no id to delete", 
-		-type => 'Ok',
-		) unless($id);
+	return "Sorry, no id to delete"
+		unless($id);
 
-	my $answer = $w->messageBox(
+	my $answer = $obj->messageBox(
 		-message => 'Are you sure?', 
 		-title => "Delete Row from ".$table, 
 		-type => 'okcancel', 
-		-default => 'cancel'); 
+		-default => 'cancel')
+			unless($nowarn); 
 
 	$obj->type('delete');
 
-	if ( $answer =~ /ok/i) {
+	if ( (defined $answer and $answer =~ /ok/i) || $nowarn) {
 		my $info;
 		my $sql = sprintf("DELETE FROM %s WHERE %s = %d",
 					$table,
@@ -601,10 +649,9 @@ sub deleRecord {
 					$id);
 		$obj->debug($sql);
 		$info = $obj->{dbh}->do($sql) 
-			or $obj->error($obj->{dbh}->error);
-		$obj->messageBox(-message => "Error! ".$obj->error )
-			unless($info && $info ne '0E0');
+			or return $obj->{dbh}->error();
 	}
+	1;
 }
 
 # ------------------------------------------
@@ -638,6 +685,19 @@ sub editRecord {
 
 	$obj->type( $id ? 'update' : 'insert');
 
+	my $key;
+	if($id and $obj->type() eq 'update') {
+		$key = sprintf('xpix_%s_%s', $obj->{table}, $id);
+		if(defined $obj->{windows}->{$key}) {
+			$obj->{windows}->{$key}->raise();
+			return;
+		}
+		$obj->get_lock($key)
+			|| return $obj->messageBox(
+				-message => sprintf("Sorry, but this id <%s> is locked! Please try again later.", $id), 
+				-type => 'Ok');
+	}
+
 	my $sql = $obj->makeSql($id);
 	my $erg = $obj->getSqlArray($sql);
 	my $save = {};
@@ -658,18 +718,41 @@ sub editRecord {
 	push(@buttons, 'Cancel')
 		unless($opt->{all_readonly});
 
+	my $title = ($opt->{all_readonly} ? 'Display' : ($id ? 'Save' : 'Insert'))." Record ".$obj->{table};
+	$title = sprintf("Insert Range from %s to %s", $opt->{range_from}, $opt->{range_until})
+		if(defined $opt->{range_until} && $opt->{range_until}); 
+
 	my $dialog;
 	$dialog = $obj->XDialogBox(
-		-title          => ($opt->{all_readonly} ? 'Display' : ($id ? 'Save' : 'Insert'))." Record ".$obj->{table},
+		-title          => $title,
 		-buttons        => \@buttons,
 		-default_button => ($opt->{all_readonly} ? 'Ok' : ($id ? 'Save' : 'Insert')),
+		-cancel_callback => sub{ 
+				if($key) {
+					$obj->release_lock($key);
+					delete $obj->{windows}->{$key} if($key);;
+				}
+			},
 		-check_callback => sub {
 			my $answer = shift;
 			if ( $answer eq 'Save' or $answer eq 'Insert') {
 				foreach my $sub (keys %{$obj->{gets}}) {
 					&{$obj->{gets}->{$sub}};
 				}
-				$obj->{info} = $obj->SaveToDB( $save, $id );
+
+				# Range
+				if(defined $opt->{range_until} && $opt->{range_until}) {
+					foreach my $nummer (($opt->{range_from}..$opt->{range_until})) {
+						$obj->{info} = $obj->SaveToDB( $save, $nummer );
+					}
+				} elsif(defined $opt->{list} && scalar @{$opt->{list}}) {
+					foreach my $nummer (@{$opt->{list}}) {
+						$obj->{info} = $obj->SaveToDB( $save, $nummer );
+					}
+				} else {
+					$obj->{info} = $obj->SaveToDB( $save, $id );
+				}
+
 				if(defined $obj->{info} and $obj->{info} eq 'NOMESSAGE') {
 					return undef;		# Zurueck ohne Fehlermeldung
 				} elsif($obj->{info}) { 
@@ -682,12 +765,11 @@ sub editRecord {
 				}
 			} elsif($answer eq 'Cancel' and defined $obj->{cancel_cb} and ref $obj->{cancel_cb} eq 'CODE') {
 				&{$obj->{cancel_cb}}($save);
-			} elsif($answer eq 'Ok') {
-				$dialog->withdraw;			
 			} 
 			return 1;
 		},
 	);
+	$obj->{windows}->{$key} = $dialog if($key);
 	$dialog->resizable(0,0);
 
 	$obj->{SAVE} = $save = $obj->makeForm( $dialog, $erg, 'edit', $opt );
@@ -713,6 +795,11 @@ sub editRecord {
 	}
 	$dialog->bind('<Return>' => sub{});
 	my $answer = $dialog->Show(-nograb);
+	
+	if($key) {
+		$obj->release_lock($key);
+		delete $obj->{windows}->{$key} if($key);
+	}
 }
 
 # ------------------------------------------
@@ -792,12 +879,13 @@ sub makeSql {
 	} else {
 		# keys?
 		my $keys = $obj->get_keys();
-		my @ids	 = split(/[^0-9a-zA-Z]/, $id);
+		$id =~ s/\#/\\#/sig;
+		my @ids	 = split(/[^0-9a-zA-Z\ ]/, $id);
 		# select a record
 		$where 	 = 'WHERE ';
 		my $c = 0;
 		foreach my $value (@ids) {
-			$where .= sprintf("%s='%s' ", 
+			$where .= sprintf("%s LIKE '%s%%' ", 
 						$keys->[$c],
 						$value); 
 			$c++;
@@ -843,6 +931,25 @@ sub get_keys {
 	return $ret;
 } 
 
+# ------------------------------------------
+sub get_lock {
+# ------------------------------------------
+	my $obj = shift;
+	my $key = sprintf(shift, @_);
+	
+	my $erg = $obj->getSqlArray(sprintf 'SELECT GET_LOCK("%s", %d)', $key, $obj->{lock});
+	return $erg->[0][0];
+} 
+
+# ------------------------------------------
+sub release_lock {
+# ------------------------------------------
+	my $obj = shift;
+	my $key = sprintf(shift, @_);
+	my $erg = $obj->getSqlArray(sprintf 'SELECT RELEASE_LOCK("%s")', $key);
+	return $erg->[0][0];
+} 
+
 
 # ------------------------------------------
 sub debug {
@@ -850,7 +957,7 @@ sub debug {
 	my $obj = shift;
 	my $msg = shift || return;
 	return unless $obj->{debug};
-	printf("\nInfo: %s\n", $msg); 
+	printf("Tk::Form: %s\n", $msg); 
 } 
 
 # ------------------------------------------
@@ -995,6 +1102,7 @@ Tk::DBI::Form - Megawidget to offering edit, delete or insert a record.
 =head1 DESCRIPTION
 
 Tk::DBI::Form is a Megawidget offering edit, delete or insert operations for table records. 
+At this time if this widget only compatible to MySQL Database.
 
 =head1 OPTIONS
 
@@ -1009,6 +1117,14 @@ Name of the table you intend to modify records from.
 =head2 -debug => 1
 
 Switch the debug output to the standart console on.
+
+=head2 -lock => $timeout_in_seconds
+
+This widget have a locking mechanism. The I<timeout> is default 0 and will wait of unlock the row in seconds.
+If try a client edit a row in the same table and a other client have this open to update this row with 
+the same widget, then have the first client a error Message:
+
+	Sorry, but this id <%s> is locked! Please try again later.	 
 
 =head2 -edit_id => 1
 
@@ -1080,6 +1196,24 @@ This option sets the default values for the listed fields that will be displayed
 	deadline => 'NOW',
 	Server => $HOST,
   } 
+
+=head2 -addFields => { Name => {value =>'text', type => 'text'}, Name2 = {...} }
+
+This option allow an additional Field in the form, both (value, type) Options is required.
+This Field will NOT save in the database, of course ;-)
+You can get the result with $tkdbi->{SAVE}->{Name} after user submit. 
+
+I.e.: 
+
+  -addFields => {
+	LogEntry => {
+		value => '',
+		type => 'text',
+	}
+  },
+  ...
+  my $value = $tkdbi->{SAVE}->{LogEntry};
+
 
 =head2 -images => { col1 => ImageObj, col2 = ImageObj, ...}
 
@@ -1209,6 +1343,10 @@ The example will display a logbrowser when the user click on the Button 'Logs'.
 
 =head1 METHODS
 
+=head2 dsplRecord(id);
+
+This will only display row data.
+
 =head2 editRecord(id);
 
 This will display the update form with the following id number for an update.
@@ -1243,6 +1381,25 @@ The Widgets in the form are advertised with 'wi_namecolumn'.
 =head1 CHANGES
 
   $Log: Form.pm,v $
+  Revision 1.14  2003/08/13 12:30:26  xpix
+  * new Option addFields
+
+  Revision 1.13  2003/07/17 14:59:53  xpix
+  ! many little bugfixes
+
+  Revision 1.12  2003/06/24 16:40:15  xpix
+  * add locking mechanism
+
+  Revision 1.11  2003/06/20 15:07:07  xpix
+  ! never change a running Widget, push a var and not a ref in @values
+
+  Revision 1.9  2003/06/05 15:32:48  xpix
+  * with new Module Tk::Program
+  ! unitialized values in tm2unix
+
+  Revision 1.8  2003/05/04 23:36:50  xpix
+  * add docu for dsplRecord
+
   Revision 1.7  2003/05/04 20:53:39  xpix
   * new method dsplRecord for only display a record
 
