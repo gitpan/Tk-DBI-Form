@@ -2,8 +2,8 @@ package Tk::DBI::Form;
 #------------------------------------------------
 # automagically updated versioning variables -- CVS modifies these!
 #------------------------------------------------
-our $Revision           = '$Revision: 1.4 $';
-our $CheckinDate        = '$Date: 2003/04/03 15:39:27 $';
+our $Revision           = '$Revision: 1.6 $';
+our $CheckinDate        = '$Date: 2003/04/29 16:34:46 $';
 our $CheckinUser        = '$Author: xpix $';
 # we need to clean these up right here
 $Revision               =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
@@ -893,8 +893,8 @@ Tk::DBI::Form
 				my ($entry, $save, $input) = @_;
 				$save->{id} = 0 unless(defined $save->{id});
 				$entry->configure( 
-					-bg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'red' : 'green' ),
-					-fg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'white' : 'black' ),
+					-bg => ( exists $SERIAL->{$input} ? 'red' : 'green' ),
+					-fg => ( exists $SERIAL->{$input} ? 'white' : 'black' ),
 					 );
 				return 1 ;
 			},
@@ -934,40 +934,47 @@ Tk::DBI::Form
 	
 	my $ok = $tkdbi->editRecord($row->{id});
 
+=head1 NAME
+
+Tk::DBI::Form - Megawidget to offering edit, delete or insert a record. 
 
 =head1 DESCRIPTION
 
-Tk::DBI::Form is a Megawidget to allow edit, delete or insert a record from a table. 
+Tk::DBI::Form is a Megawidget offering edit, delete or insert operations for table records. 
 
 =head1 OPTIONS
 
 =head2 -dbh
 
-The database handle to get the information from Database.
+The database handle to get the information from the Database.
 
 =head2 -table
 
-The table where you will change the data.
+Name of the table you intend to modify records from. 
 
 =head2 -debug => 1
 
-Switch the debug output at the standart console on.
+Switch the debug output to the standart console on.
 
 =head2 -edit_id => 1
 
-This allows to edit the ID-Number, this is normaly a unique and autoincrement Field for every column.
+This allows to edit the ID-Number on the form, this is normaly a unique and autoincrement Field for each column.
 
 =head2 -update => [qw(id col1 col2 ...)]
 
-This is the list to allow update following Fields. Only this fields is display in the update Form. 
+List of fields that are granted update priviliges on. Only these fields are visible on the Update Form
 
 =head2 -insert => [qw(id col1 col2 ...)]
 
-This is the list to allow insert following Fields. Only this fields is display in the insert Form. 
+List of fields that are granted insert priviliges on. Only these fields are displayed on the Insert Form. 
 
 =head2 -link => { col1 => {table => tablename, display => col2, id => idcol, where => 'WHERE col3 = 1'}, ... }
 
-This is a special Feature for Fields in a another Table. Often we use other datas from tables, this data have a id number and a description. The id number from this table is mostly in the table to edit as id number. Here you can display the Description for this id and the user can change this choice. I.e.:
+This is a special Feature for fields located in a different table than given in -table. 
+Often data from further tables is used, this data usually has an id number and a 
+description. The id number from this table is mostly in the table to edit as id number. 
+Here you can display the Description for this id and the user can change this choice. 
+I.e.: 
 
   -link => {
 	parent_id => {
@@ -983,12 +990,14 @@ This is a special Feature for Fields in a another Table. Often we use other data
 	},
   }
 
-Ok, here we have two linktables. This will display a Listwidget, thes have the column 'name' to display in this Listbox. But the form write the id in the original column.
+Ok, here we have two linktables. This will display a Listwidget, thes have the column 'name' 
+to display in this Listbox. But the form write the id in the original column. 
 
 
 =head2 -required => { col1 => 1, col2 = 1, ...}
 
-Here you can mark the required field for the Form, the form will display a error MessageBox to display 'col1 is a required field!'.
+Here you can mark the fields where an entry is mandatory on the Form, is case no entry will be provided, 
+the form will raise an error MessageBox displaying 'col1 is a required field!'. 
 
   -required => {
 	changed_by => 1,
@@ -999,7 +1008,7 @@ Here you can mark the required field for the Form, the form will display a error
 
 =head2 -readonly => { col1 => 'text', col2 = number, ...}
 
-This will display the values and the user can't change this data.
+This option will set the columns as read only. The values are displayed but the user cannot change the data
 
   -readonly => {
 	changed_by => $USER,
@@ -1010,7 +1019,7 @@ This will display the values and the user can't change this data.
 
 =head2 -default => { col1 => 'text', col2 = number, ...}
 
-This will display default values for the form. I.e.:
+This option sets the default values for the listed fields that will be displayed on the form. I.e.: 
 
   -default => {
 	changed_by => $USER,
@@ -1020,11 +1029,11 @@ This will display default values for the form. I.e.:
 
 =head2 -images => { col1 => ImageObj, col2 = ImageObj, ...}
 
-This will display a little Icon next to the input or whatever widget.
+This option sets the Image Object for an icon that will be displayed next to the input or widget. 
 
 =head2 -alternateTypes => { col1 => ImageObj, col2 = ImageObj, ...}
 
-Here you can get a alternativeType to display. I.E.:
+Here you can set a alternativeType to display. I.E.:
 
   -alternateTypes => {
 	filename => {
@@ -1040,17 +1049,18 @@ Here you can get a alternativeType to display. I.E.:
 
 =item file
 
-This will display a entry and button, the user can click on this button and form will display a Fileselector for get the right file and path.
+This parameter results in displaying an entry and a button, the user can click on this button 
+and a Fileselector will pop up on the form to select the right file and path. 
 
 =item password
 
-This will display a entry with hidden letters as stars..
+This will display an entry with hidden letters as stars on the form. 
 
 =back
 
 =head2 -events => { Event => sub{}, Event => sub{}, ...}
 
-This will add your personal events whatever you need. I.E.:
+This option lets you add your personal events. I.E.: 
 
   -events => {
 	'<KeyRelease-F1>' => sub { 
@@ -1060,20 +1070,24 @@ This will add your personal events whatever you need. I.E.:
 
 =head2 -validate_cb => { col1 => sub{}, col2 => sub{}, ...}
 
-Here you can add a callback to test the input from the user in realtime. The parameter for the subroutine is the entry, save hash with data from the Form ans the input from the User. I.E.:
+Here you can add a callback to test the input from the user in realtime. 
+The parameter for the subroutine is the entry, save hash with data from 
+the Form and the input from the User. I.E.:
 
 
   serial_no => sub {
 	my ($entry, $save, $input) = @_;
 	$save->{id} = 0 unless(defined $save->{id});
 	$entry->configure( 
-		-bg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'red' : 'green' ),
-		-fg => ( exists $SERIAL->{$input} && $save->{id} != $SERIAL->{$input}->{id} ? 'white' : 'black' ),
+		-bg => ( exists $SERIAL->{$input} ? 'red' : 'green' ),
+		-fg => ( exists $SERIAL->{$input} ? 'white' : 'black' ),
 		 );
 	return 1 ;
   },
 
-This change the foreground and background color from the entry when the serial number exist in the table. The subroutine can return a undef value, then the widget ignoring this Userinput. I.e.:
+This changes the foreground and background color of the entry if the 
+serial number exists in the table. The subroutine can return a undef value, 
+then the widget will igrnore this Userinput. I.e.:
 
   only_numbers => sub {
 	my ($entry, $save, $input) = @_;
@@ -1084,7 +1098,9 @@ This change the foreground and background color from the entry when the serial n
 
 =head2 -test_cb => { col1 => sub{}, col2 => sub{}, ...}
 
-Here you can add a callback to test the user input AFTER submit this form. The parameter for the subroutine is the save hash and the name from this field. I.E.:
+Here you can add a callback to test the user input AFTER submission of the form. 
+The parameter for the subroutine is the save hash and the name of the 
+field. I.E.:
 
   -test_cb => {
 	id => sub{
@@ -1107,16 +1123,22 @@ Here you can add a callback to test the user input AFTER submit this form. The p
   }
 
 
-The first example will pop up a MessageBox when the User make a Insert with a id number (replace). The second example will reformat the parent_id Number to 0000000012. If the parent_id doesnt exist in the Hash, the will return a Errormessage (MessageBox) with the returned text. 'NOMESSAGE' as return doesnt pop up a MessageBox. Return undef, all ok.
+The first example will pop up a MessageBox if the User makes an Insert 
+with an id number (replace). The second example will reformat the parent_id 
+Number to 0000000012. If the parent_id does not exist in the Hash, an Errormessage (MessageBox) 
+with the returned the returned text. 'NOMESSAGE' as 
+return doesnt pop up a MessageBox. Return undef, all ok.
 
 
 =head2 -cancel_cb => sub{ }
 
-Here you can add a callback when the User activate the Cancel Button.
+Here you can add a callback when the User activates the Cancel Button.
 
 =head2 -addButtons => { ButtonName => {-type => ['update', 'insert'], -callback => sub{} }
 
-Here you can add a Button to the FormBox. The -type option will only display the button in the following state (insert, update or delete). The callback has one parameter. The save hash.  I.e.:
+Here you can add a Button to the FormBox. The -type option will only 
+display the button in the following state (insert, update or delete). 
+The callback has one parameter. The save hash.  I.e.:
 
 		-addButtons => {
 			Logs => { 
@@ -1135,11 +1157,11 @@ The example will display a logbrowser when the user click on the Button 'Logs'.
 
 =head2 editRecord(id);
 
-This will display the update form with the following id number for update.
+This will display the update form with the following id number for an update.
 
 =head2 newRecord([id]);
 
-This will display the insert form with the following id number for Replace.
+This will display the insert form with the following id number for a Replace operation.
 
   my $datahash = $DBH->selectall_hashref(select * from table where id = 12);
   delete $datahash->{id};
@@ -1149,19 +1171,28 @@ This will display the insert form with the following id number for Replace.
 	},	
   );
 
-Here you see a trick to copy a column, also display a insert form with the values from column 12.
+Here you see a trick to copy a column, also display a insert form with the 
+values from column 12.
 
 =head2 deleRecord(id);
 
-This will display the delete form with the following id number for Delete.
+This will display the delete form with the following id number for a delete operation.
 
 =head2 Table_is_Change(last_time, 'tablename');
 
-This return true when the table is changed at the last_time (seconds at epoche).
+This returns true if the table was modified the last_time (seconds at epoche).
 
 =head1 ADVERTISED WIDGETS
 
-The Widgets in the form is advertised with 'wi_namecolumn'.
+The Widgets in the form are advertised with 'wi_namecolumn'.
+
+=head1 CHANGES
+
+$Log: Form.pm,v $
+Revision 1.6  2003/04/29 16:34:46  xpix
+* add Doku tag Changes
+
+
 
 =head1 AUTHOR
 
@@ -1174,7 +1205,8 @@ modify it under the same terms as Perl itself.
 
 =head1 KEYWORDS
 
-Tk::JBrowseEntry, Tk::XDialogBox, Tk::NumEntry, Tk::Date, Tk::LabFrame, Tk::FBox
+Tk::JBrowseEntry, Tk::XDialogBox, Tk::NumEntry, Tk::Date, Tk::LabFrame, 
+Tk::FBox
 
 
 =cut
