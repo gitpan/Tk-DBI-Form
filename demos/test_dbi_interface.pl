@@ -26,11 +26,12 @@ my $tkdbi = $mw->DBIForm(
 		-dbh   		=> $dbh,
 		-table  	=> $table,
 		-editId		=> 'yes',
+		-debug 		=> 1,
 );
 
-$tkdbi->newRecord();
+#$tkdbi->newRecord();
 
-# $tkdbi->editRecord($id);
+$tkdbi->dsplRecord($id);
 
 
 printf "$table changed in last 10 minutes?: %s\n", ($tkdbi->Table_is_Change(time - 600) ? 'YES' : 'NO');

@@ -2,8 +2,8 @@ package Tk::DBI::Form;
 #------------------------------------------------
 # automagically updated versioning variables -- CVS modifies these!
 #------------------------------------------------
-our $Revision           = '$Revision: 1.6 $';
-our $CheckinDate        = '$Date: 2003/04/29 16:34:46 $';
+our $Revision           = '$Revision: 1.7 $';
+our $CheckinDate        = '$Date: 2003/05/04 20:53:39 $';
 our $CheckinUser        = '$Author: xpix $';
 # we need to clean these up right here
 $Revision               =~ s/^\$\S+:\s*(.*?)\s*\$$/$1/sx;
@@ -19,7 +19,7 @@ use Tk::NumEntry;
 use Tk::Date;
 use Tk::LabFrame;
 use Tk::FBox;
-
+use Tk::ROText;
 
 use Date::Manip;
 use Data::Dumper;
@@ -224,8 +224,19 @@ sub _readonly_widget {
 # ------------------------------------------
 	my ( $obj, $dialog, $name, $value, $save) = @_;
 	$save->{$name} = $obj->{readonly}->{$name} || $value;
-	my $entry = $dialog->Label( -text => (defined $value && $save->{$name} ne $value ? sprintf('%s [%s]', $save->{$name}, (defined $value ? $value : '-')) :  $save->{$name}));
-	return $entry;
+	my $text = (defined $value && $save->{$name} ne $value 
+					?  sprintf('%s [%s]', $save->{$name}, (defined $value ? $value : '-')) 
+					:  $save->{$name});
+	if(length($text) > 50) {
+		my $entry = $dialog->Scrolled(qw/ROText -wrap word -scrollbars osoe -width 50 -height 10/);
+                $entry->insert("end", $text);
+		return $entry;
+	} else {
+		my $entry = $dialog->Label( 
+				-text => $text
+				);
+		return $entry;
+	}
 }                                                                                  
 
 # ------------------------------------------
@@ -519,7 +530,7 @@ sub makeForm {
 		);
 
 
-		if (defined $obj->{readonly}->{$name} ) {
+		if (defined $obj->{readonly}->{$name} || $opt->{all_readonly}) {
 			$obj->{entrys}->{$name} = $obj->_readonly_widget($dialog, $name, $value, $save);
 		} elsif ( defined $obj->{'link'}->{$name} ) {
 			$obj->{entrys}->{$name} = $obj->_link_widget($dialog, $name, $value, $save);
@@ -606,6 +617,18 @@ sub newRecord {
 }
 
 # ------------------------------------------
+sub dsplRecord {
+# ------------------------------------------
+	my $obj = shift || warn "Kein Objekt!";
+	my $id = shift;
+	my $options = 
+	$obj->editRecord($id, {
+		all_readonly => 1,
+		} );
+}
+
+
+# ------------------------------------------
 sub editRecord {
 # ------------------------------------------
 	my $obj = shift || warn "Kein Objekt!";
@@ -621,17 +644,25 @@ sub editRecord {
 
 
 	my @buttons;
+	if($opt->{all_readonly}) {
+		push(@buttons, 'Ok');
+	} else {
+                push(@buttons, ($id ? 'Save' : 'Insert'));
+	}
 	if(defined $obj->{addButtons}) {
 		foreach my $bname (sort keys %{$obj->{addButtons}}) {
 			push(@buttons, $bname)
 				if(ref $obj->{addButtons}->{$bname} eq 'CODE' or grep(/$obj->{TYPE}/i, @{$obj->{addButtons}->{$bname}->{'-type'}}));
 		}
 	}
+	push(@buttons, 'Cancel')
+		unless($opt->{all_readonly});
 
-	my $dialog = $obj->XDialogBox(
-		-title          => ($id ? 'Save' : 'Insert')." Record ".$obj->{table},
-		-buttons        => [ ($id ? 'Save' : 'Insert'), @buttons, 'Cancel' ],
-		-default_button => ($id ? 'Save' : 'Insert'),
+	my $dialog;
+	$dialog = $obj->XDialogBox(
+		-title          => ($opt->{all_readonly} ? 'Display' : ($id ? 'Save' : 'Insert'))." Record ".$obj->{table},
+		-buttons        => \@buttons,
+		-default_button => ($opt->{all_readonly} ? 'Ok' : ($id ? 'Save' : 'Insert')),
 		-check_callback => sub {
 			my $answer = shift;
 			if ( $answer eq 'Save' or $answer eq 'Insert') {
@@ -651,7 +682,9 @@ sub editRecord {
 				}
 			} elsif($answer eq 'Cancel' and defined $obj->{cancel_cb} and ref $obj->{cancel_cb} eq 'CODE') {
 				&{$obj->{cancel_cb}}($save);
-			}
+			} elsif($answer eq 'Ok') {
+				$dialog->withdraw;			
+			} 
 			return 1;
 		},
 	);
@@ -757,10 +790,21 @@ sub makeSql {
 
 
 	} else {
+		# keys?
+		my $keys = $obj->get_keys();
+		my @ids	 = split(/[^0-9a-zA-Z]/, $id);
 		# select a record
-		$where = sprintf("WHERE %s = %d", 
-					$fields->[0],
-					$id); 
+		$where 	 = 'WHERE ';
+		my $c = 0;
+		foreach my $value (@ids) {
+			$where .= sprintf("%s='%s' ", 
+						$keys->[$c],
+						$value); 
+			$c++;
+			$where .= 'AND '
+				if($c < scalar @ids);
+		}		
+
 	}	        
 
 	my $retsql = sprintf("SELECT %s from %s %s %s %s",
@@ -786,6 +830,19 @@ sub getSqlArray {
 	$sth->execute or warn("$DBI::errstr - $sql");
 	return $sth->fetchall_arrayref;
 }
+
+# ------------------------------------------
+sub get_keys {
+# ------------------------------------------
+	my $obj = shift;
+	my $fields = $obj->getSqlArray(sprintf('show fields from %s', $obj->{table}));
+	my $ret;
+	foreach my $f (@{$fields}) {
+		push(@$ret, $f->[0]) if($f->[3]);
+	}
+	return $ret;
+} 
+
 
 # ------------------------------------------
 sub debug {
@@ -849,7 +906,7 @@ __END__
 
 =head1 NAME
 
-Tk::DBI::Form 
+Tk::DBI::Form - Megawidget to offering edit, delete or insert a record. 
 
 =head1 SYNOPSIS
 
@@ -934,9 +991,6 @@ Tk::DBI::Form
 	
 	my $ok = $tkdbi->editRecord($row->{id});
 
-=head1 NAME
-
-Tk::DBI::Form - Megawidget to offering edit, delete or insert a record. 
 
 =head1 DESCRIPTION
 
@@ -1188,17 +1242,18 @@ The Widgets in the form are advertised with 'wi_namecolumn'.
 
 =head1 CHANGES
 
-$Log: Form.pm,v $
-Revision 1.6  2003/04/29 16:34:46  xpix
-* add Doku tag Changes
+  $Log: Form.pm,v $
+  Revision 1.7  2003/05/04 20:53:39  xpix
+  * new method dsplRecord for only display a record
+
+  Revision 1.6  2003/04/29 16:34:46  xpix
+  * add Doku tag Changes
 
 
 
 =head1 AUTHOR
 
-xpix@netzwert.ag
-
-Copyright (C) 2003 , Frank (xpix) Herrmann. All rights reserved.
+Frank (xpix) Herrmann. <xpix@cpan.org>
 
 This program is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
